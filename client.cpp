@@ -32,10 +32,10 @@ int main(int argc, char *argv[]) {
 		//get file name
 		//send file
 		status = sendFile(NULL, fdSock);
-		QRErrCheckNotZero(status, "sendFile");
+		QRErrCheckStdError(status, "sendFile");
 		
 		status = rcvResponse(fdSock);
-		QRErrCheckNotZero(status, "rcvResponse");
+		QRErrCheckStdError(status, "rcvResponse");
 		
 		//receieve return code
 		//receive string

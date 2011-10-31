@@ -7,11 +7,11 @@
 //use the following macros to create and throw QRException objects
 #define QRErrCheckStdError(RESULT, FUNCNAME) \
 if((RESULT) == -1) \
-throw new QRException(errno, __LINE__, (FUNCNAME), strerror(errno));
+throw new QRException(__LINE__, errno, (FUNCNAME), strerror(errno));
 
 #define QRErrCheckNotZero(RESULT, FUNCNAME) \
 if((RESULT) != 0) \
-throw new QRException(errno, __LINE__, (FUNCNAME));
+throw new QRException(__LINE__, errno, (FUNCNAME));
 
 class QRException {
 	private:
@@ -27,6 +27,6 @@ class QRException {
 		}
 		//print error message to given stream
 		void printError(std::ostream &dest) {
-			dest<<message<<std::endl;
+			dest<<message.str()<<std::endl;
 		}
 };
