@@ -1,4 +1,6 @@
 //server
+#define DEBUG 1
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -22,8 +24,8 @@ int main(int argc, char *argv[]) {
 	struct sockaddr_storage remoteAddr;
 	socklen_t remAddrLen = sizeof(remoteAddr);
 	int fdConn = 0;
-	int inBufSize = 128;
-	char *inputBuffer = new char[inBufSize];
+	int bufSize = 128;
+	char *buffer = new char[bufSize];
 	
 	//fill in hints struct
 	memset(&hints, 0, sizeof hints);
@@ -57,14 +59,31 @@ int main(int argc, char *argv[]) {
 	
 	cout << "server accepting" << endl;
 	fdConn = accept(fdSock, (struct sockaddr *)&remoteAddr, &remAddrLen);
+#if DEBUG
 	cout << "server accepted" << endl;
 	cout << "remAddrLen: " << remAddrLen << endl;
 	cout << "fdConn value: " << fdConn << endl;
 	cout << "addr data: " << ((struct sockaddr_in6 *) &remoteAddr)->sin6_addr.s6_addr << endl;
-	status = read(fdConn, inputBuffer, inBufSize);
-	cout << "server read status: " << status << endl;
-	cout << "server read errmsg: " << strerror(errno) << endl;
-	cout << "server message: " << inputBuffer << endl;
+#endif
+	status = read(fdConn, buffer, bufSize);
+#if DEBUG
+	cout << "server message: " << buffer << endl;
+#endif
+	if(status == -1) {
+		cout << "read error: " << strerror(errno) << endl;
+		return -1;
+	}
+
+	//prototype: respond to client
+	strcpy(buffer, "Hello client!");
+	bufSize = strlen(buffer);
+	status = write(fdConn, buffer, bufSize);
+	if(status == -1) {
+		cout << "write error: " << strerror(errno) << endl;
+		return -1;
+	}
+	
+
 	//when receive new connection:
 		//check for too many users. If too many, don't fork
 		//fork

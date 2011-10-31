@@ -2,6 +2,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <errno.h>
 #include <cstring>
 #include <unistd.h>
 #include <iostream>
@@ -41,6 +42,11 @@ int main(int argc, char *argv[]) {
 	}
 	cout << "client send status: " << status << endl;
 	
+	status = rcvResponse(fdSock);
+	if(status != 0) {
+	
+	}
+	
 	//receieve return code
 	//receive string
 		//get string array size
@@ -77,6 +83,19 @@ int sendFile(char *fileName, int fdSock) {
 }
 
 int rcvResponse(int fdSock) {
-	int status;
+	int status = 0;
+	int bufSize = 128;
+	char *buffer = new char[bufSize];
+	
+	status = read(fdSock, buffer, bufSize);
+	
+	if(status == -1) {
+		cout << "read error: " << strerror(errno) << endl;
+		status = -1;
+	}
+	else {
+		cout<<"response to client: "<<buffer<<endl;
+	}
+	
 	return status;
 }
