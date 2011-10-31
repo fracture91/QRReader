@@ -8,6 +8,8 @@
 #include <iostream>
 using namespace std;
 
+#include "qrexception.h"
+
 int sendFile(char *fileName, int fdSock);
 int rcvResponse(int fdSock);
 
@@ -15,48 +17,43 @@ int main(int argc, char *argv[]) {
 	int status = 0;
 	int fdSock = 0;
 	struct addrinfo *addr = NULL;
-	//get command line args, check for valid
-	status = getaddrinfo("127.0.0.1", "2011", NULL, &addr);
-	if(status != 0) {
-		//print error msg
-		return -1;
-	}
-		
-	//connect to server
-	fdSock = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
-	if(fdSock == -1) {
-		//print error msg (errno)
-		return -1;
-	}
-	status = connect(fdSock, addr->ai_addr, addr->ai_addrlen);
-	if(status == -1) {
-		//print error msg (errno)
-		return -1;
-	}
+	
+	try	{
+		//get command line args, check for valid
+		status = getaddrinfo("127.0.0.1", "2011", NULL, &addr);
+		QRErrCheckNotZero(status, "getaddrinfo");
+			
+		//connect to server
+		fdSock = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
+		QRErrCheckStdError(fdSock, "socket");
+		status = connect(fdSock, addr->ai_addr, addr->ai_addrlen);
+		QRErrCheckStdError(status, "connect");
 
-	//get file name
-	//send file
-	status = sendFile(NULL, fdSock);
-	if(status != 0) {
-	
+		//get file name
+		//send file
+		status = sendFile(NULL, fdSock);
+		QRErrCheckNotZero(status, "sendFile");
+		
+		status = rcvResponse(fdSock);
+		QRErrCheckNotZero(status, "rcvResponse");
+		
+		//receieve return code
+		//receive string
+			//get string array size
+			//get array
+		//if success:
+			//display URL
+		//if failure:
+			//display error message
+		//repeat or break out of loop
+		//disconnect
+		status = close(fdSock);
+		QRErrCheckStdError(status, "close");
 	}
-	cout << "client send status: " << status << endl;
-	
-	status = rcvResponse(fdSock);
-	if(status != 0) {
-	
+	catch (QRException *ex) {
+		ex->printError(std::cerr);
+		status = -1;
 	}
-	
-	//receieve return code
-	//receive string
-		//get string array size
-		//get array
-	//if success:
-		//display URL
-	//if failure:
-		//display error message
-	//repeat or break out of loop
-	//disconnect
 	return status;
 }
 
@@ -72,12 +69,7 @@ int sendFile(char *fileName, int fdSock) {
 	
 	
 	status = write(fdSock, buffer, bufSize);
-	if(status == -1) {
-		//print error msg (errno)
-		return -1;
-	}
-	else
-		status = 0;
+	QRErrCheckStdError(status, "write");
 	
 	return status;
 }
@@ -88,14 +80,9 @@ int rcvResponse(int fdSock) {
 	char *buffer = new char[bufSize];
 	
 	status = read(fdSock, buffer, bufSize);
+	QRErrCheckStdError(status, "read");
 	
-	if(status == -1) {
-		cout << "read error: " << strerror(errno) << endl;
-		status = -1;
-	}
-	else {
-		cout<<"response to client: "<<buffer<<endl;
-	}
+	cout<<"response to client: "<<buffer<<endl;
 	
 	return status;
 }
