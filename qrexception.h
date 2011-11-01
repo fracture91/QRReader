@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 
+
 //use the following macros to create and throw QRException objects
 #define QRErrCheckStdError(RESULT, FUNCNAME) \
 if((RESULT) == -1) \
