@@ -7,6 +7,7 @@
 #include <cstring>
 #include <unistd.h>
 #include <iostream>
+#include <fstream>
 #include <stdint.h>
 using namespace std;
 
@@ -59,13 +60,34 @@ int main(int argc, char *argv[]) {
 	return status;
 }
 
+//read filename into a char array, make *output point to said array
+//returns the length of the file
+uint32_t readFile(char *fileName, char **output) {
+	uint32_t length = 0;
+	//ate flag makes it start at the end of the file, so we can get the size easily
+	ifstream file(fileName, ifstream::binary | ifstream::in | ifstream::ate);
+	if(file.is_open()) {
+		length = file.tellg();
+		file.seekg(0, ifstream::beg);
+		*output = new char[length];
+		file.read(*output, length);
+		file.close();
+	}
+	else {
+		throw new QRException(__LINE__, NULL, "ifstream", "File was not opened properly");
+	}
+	return length;
+}
+
 int sendFile(char *fileName, int fdSock) {
 	int status = 0;
 	
-	//todo: actually read file
-	char file[] = "Hello Server!";
+	char *file;
 	//a plain unsigned int isn't guaranteed to be 32 bits, but uint32_t is
-	uint32_t fileLength = strlen(file) + 1;
+	uint32_t fileLength = readFile(".gitignore", &file);
+	if(fileLength < 1) {
+		throw new QRException(__LINE__, NULL, "readFile", "File length is less than 1 byte");
+		}
 	uint32_t netFileLength = htonl(fileLength);
 	int messageLength = fileLength + 4;
 	char *buffer = new char[messageLength];
@@ -75,6 +97,7 @@ int sendFile(char *fileName, int fdSock) {
 	status = write(fdSock, buffer, messageLength);
 	QRErrCheckStdError(status, "write");
 	delete[] buffer;
+	delete[] file;
 	
 	return status;
 }
