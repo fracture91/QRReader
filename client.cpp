@@ -78,15 +78,38 @@ int sendFile(char *fileName, int fdSock) {
 	return status;
 }
 
-int rcvResponse(int fdSock) {
-	int status = 0;
-	int bufSize = 128;
-	char *buffer = new char[bufSize];
-	
-	status = read(fdSock, buffer, bufSize);
+uint32_t readIntFromResponse(int fdSock) {
+	uint32_t netNumber = 0;
+	int status = read(fdSock, &netNumber, 4);
 	QRErrCheckStdError(status, "read");
 	
-	cout<<"response to client: "<<buffer<<endl;
+	return ntohl(netNumber);
+}
+
+int rcvResponse(int fdSock) {
+	int status = 0;
+	uint32_t returnCode = readIntFromResponse(fdSock);
+	uint32_t length = readIntFromResponse(fdSock);
+
+	if(returnCode == 0 || returnCode == 2) {
+		if(returnCode == 2) {
+			cerr << "Timeout: ";
+		}
+		
+		char *buffer = new char[length];
+		status = read(fdSock, buffer, length);
+		QRErrCheckStdError(status, "read");
+		
+		if(returnCode == 0) {
+			cout << buffer << endl;
+		}
+		else {
+			cerr << buffer << endl;
+		}
+	}
+	else {
+		cerr << "Failure" << endl;
+	}
 	
 	return status;
 }
