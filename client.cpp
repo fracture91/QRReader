@@ -2,10 +2,12 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <errno.h>
 #include <cstring>
 #include <unistd.h>
 #include <iostream>
+#include <stdint.h>
 using namespace std;
 
 #include "qrexception.h"
@@ -58,17 +60,19 @@ int main(int argc, char *argv[]) {
 }
 
 int sendFile(char *fileName, int fdSock) {
-	char buffer[128] = "Hello Server!";
-	int bufSize = strlen(buffer)+1;
 	int status = 0;
-	//open file
-	//read file into buffer
-	//get file size
-	//send file size to server
-	//send file to server
 	
+	//todo: actually read file
+	char file[] = "Hello Server!";
+	//a plain unsigned int isn't guaranteed to be 32 bits, but uint32_t is
+	uint32_t fileLength = strlen(file) + 1;
+	uint32_t netFileLength = htonl(fileLength);
+	int messageLength = fileLength + 4;
+	char *buffer = new char[messageLength];
+	memcpy(buffer, &netFileLength, 4);
+	memcpy(buffer+4, file, fileLength);
 	
-	status = write(fdSock, buffer, bufSize);
+	status = write(fdSock, buffer, messageLength);
 	QRErrCheckStdError(status, "write");
 	
 	return status;
