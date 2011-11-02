@@ -2,7 +2,6 @@
 
 #include <ostream>
 #include <sstream>
-#include <string>
 
 
 //use the following macros to create and throw QRException objects
@@ -19,7 +18,7 @@ class QRException {
 		std::ostringstream message;
 	public:
 		//Make exception object given error code, name of failed function, and optionally an additional message
-		QRException(int line, int code, string funcName, char *_message = NULL) {
+		QRException(int line, int code, const char *funcName, const char *_message = NULL) {
 			message<<funcName<<" failed on line "<<line<<".\nError code: "<<code<<".\n";
 			//if message supplied, add it to logged message
 			if(_message) {

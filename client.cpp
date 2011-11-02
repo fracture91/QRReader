@@ -13,7 +13,7 @@ using namespace std;
 
 #include "qrexception.h"
 
-int sendFile(char *fileName, int fdSock);
+int sendFile(const char *fileName, int fdSock);
 int rcvResponse(int fdSock);
 
 int main(int argc, char *argv[]) {
@@ -62,7 +62,7 @@ int main(int argc, char *argv[]) {
 
 //read filename into a char array, make *output point to said array
 //returns the length of the file
-uint32_t readFile(char *fileName, char **output) {
+uint32_t readFile(const char *fileName, char **output) {
 	uint32_t length = 0;
 	//ate flag makes it start at the end of the file, so we can get the size easily
 	ifstream file(fileName, ifstream::binary | ifstream::in | ifstream::ate);
@@ -79,7 +79,7 @@ uint32_t readFile(char *fileName, char **output) {
 	return length;
 }
 
-int sendFile(char *fileName, int fdSock) {
+int sendFile(const char *fileName, int fdSock) {
 	int status = 0;
 	
 	char *file;
