@@ -74,6 +74,7 @@ int sendFile(char *fileName, int fdSock) {
 	
 	status = write(fdSock, buffer, messageLength);
 	QRErrCheckStdError(status, "write");
+	delete[] buffer;
 	
 	return status;
 }
@@ -106,6 +107,8 @@ int rcvResponse(int fdSock) {
 		else {
 			cerr << buffer << endl;
 		}
+		
+		delete[] buffer;
 	}
 	else {
 		cerr << "Failure" << endl;
