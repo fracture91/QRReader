@@ -20,9 +20,16 @@ int main(int argc, char *argv[]) {
 	int status = 0;
 	int fdSock = 0;
 	struct addrinfo *addr = NULL;
+	char *fileName = NULL;
 	
 	try	{
-		//get command line args, check for valid
+		//todo: port and IP address options
+		if(argc != 2) {
+			cerr << "Usage: client.elf IMAGE_FILE" << endl;
+			throw new QRException(__LINE__, NULL, "user input", "Image file argument is required.");
+		}
+		fileName = argv[1];
+		
 		status = getaddrinfo("127.0.0.1", "2011", NULL, &addr);
 		QRErrCheckNotZero(status, "getaddrinfo");
 			
@@ -32,9 +39,7 @@ int main(int argc, char *argv[]) {
 		status = connect(fdSock, addr->ai_addr, addr->ai_addrlen);
 		QRErrCheckStdError(status, "connect");
 
-		//get file name
-		//send file
-		status = sendFile(NULL, fdSock);
+		status = sendFile(fileName, fdSock);
 		QRErrCheckStdError(status, "sendFile");
 		
 		status = rcvResponse(fdSock);
@@ -84,7 +89,7 @@ int sendFile(const char *fileName, int fdSock) {
 	
 	char *file;
 	//a plain unsigned int isn't guaranteed to be 32 bits, but uint32_t is
-	uint32_t fileLength = readFile(".gitignore", &file);
+	uint32_t fileLength = readFile(fileName, &file);
 	if(fileLength < 1) {
 		throw new QRException(__LINE__, NULL, "readFile", "File length is less than 1 byte");
 		}
