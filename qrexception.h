@@ -13,6 +13,10 @@ throw new QRException(__LINE__, errno, (FUNCNAME), strerror(errno));
 if((RESULT) != 0) \
 throw new QRException(__LINE__, errno, (FUNCNAME));
 
+#define QRAssert(CONDITION, FUNCNAME, MESSAGE) \
+if(!(CONDITION)) \
+throw new QRException(__LINE__, 0, (FUNCNAME), (MESSAGE));
+
 class QRException {
 	private:
 		std::ostringstream message;
