@@ -1,5 +1,4 @@
 //server
-#define DEBUG 1
 
 #include <stdint.h>
 #include <sys/types.h>
@@ -20,6 +19,8 @@ using namespace std;
 /***********
  * Defines *
  ***********/
+#define DEBUG 1
+
 #define RESULT_BUF_SIZE     512
 #define TMP_FILENAME_SIZE   64
 #define LIB_CALL_SIZE       128
@@ -48,7 +49,7 @@ void readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize);
 void readQRCode(uint32_t imageSize, uint8_t *image, string &result);
 
 //Given a file descriptor and result string, send result string to client
-void sendQRResult(int fdConn, string result);
+void sendQRResult(int fdConn, uint32_t retCode, string &result);
 
 //Function definitions
 
@@ -59,14 +60,14 @@ int main(int argc, char *argv[]) {
 	struct sockaddr_storage remoteAddr;
 	socklen_t remAddrLen = sizeof(remoteAddr);
 	int fdConn = 0;
-	int bufSize = 128;
-	char *buffer = new char[bufSize];
 	uint8_t *imgBuf;
 	uint32_t imgBufSize = 0;
 	string QRResult;
 	uint32_t responseStatus = 0;
 	
 	try {
+		//get command line arguments
+	
 		//fill in hints struct
 		memset(&hints, 0, sizeof hints);
 		hints.ai_family = AF_UNSPEC;  //don't care whether it's IPv4 or v6
@@ -98,12 +99,7 @@ int main(int argc, char *argv[]) {
 		cout << "fdConn value: " << fdConn << endl;
 		cout << "addr data: " << ((struct sockaddr_in6 *) &remoteAddr)->sin6_addr.s6_addr << endl;
 	#endif
-		status = read(fdConn, buffer, bufSize);
-		QRErrCheckStdError(status, "read");
-	#if DEBUG
-		cout << "server message: " << buffer << endl;
-	#endif
-
+	
 		//when receive new connection:
 			//check for too many users. If too many, don't fork
 			//fork
@@ -118,6 +114,7 @@ int main(int argc, char *argv[]) {
 		//determine return code
 		readQRCode(imgBufSize, imgBuf, QRResult);
 		//respond to client
+		//TODO: response status
 		sendQRResult(fdConn, responseStatus, QRResult);
 		
 	}
@@ -133,12 +130,14 @@ int main(int argc, char *argv[]) {
 	
 void writeToAdminLog(ostream &outfile, char *ipClient, char *message) {
 	char timestamp[TIMESTAMP_LEN] = "";
+	time_t timeSt;
 	
 	QRAssert((ipClient != NULL), "writeToAdminLog", "NULL passed as ipClient");
 	QRAssert((message != NULL), "writeToAdminLog", "NULL passed as message");
 	
+	timeSt = time(NULL);
 	//get timestamp
-	strftime(timestamp, TIMESTAMP_LEN, "%Y-%m-%d %H:%M%S", localtime(time(NULL)));
+	strftime(timestamp, TIMESTAMP_LEN, "%Y-%m-%d %H:%M%S", localtime(&timeSt));
 	
 	outfile<<timestamp<<" "<<ipClient<<" "<<message<<"\n"<<endl;
 	QRAssert((!outfile.fail()), "ostream::operator<<", "Unable to write to administrative log");
@@ -153,23 +152,23 @@ void readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize) {
 	QRAssert((bufSize != NULL), "readClientMsg", "NULL passed as bufSize");
 	
 	//get buffer size
-	int status = read(fdConn, &lenFromClient, sizeof(lenFromClient));
+	status = read(fdConn, &lenFromClient, sizeof(lenFromClient));
 	QRErrCheckStdError(status, "read");
 	lenFromClient = ntohl(lenFromClient);
 	*bufSize = lenFromClient;
 	
 	//allocate buffer
-	*buffer = (char*)calloc(lenFromClient, sizeof(char));
+	*buffer = (uint8_t*)calloc(lenFromClient, sizeof(uint8_t));
 	QRAssert((*buffer != NULL), "calloc", "Unable to allocate memory for image buffer");
 	
 	//get buffer contents
-	status = read(fdSock, *buffer, lenFromClient);
+	status = read(fdConn, *buffer, lenFromClient);
 	QRErrCheckStdError(status, "read");
 	
 	return;
 }
 
-void readQRCode(uint32_t imageSize, int8_t *image, string &result) {
+void readQRCode(uint32_t imageSize, uint8_t *image, string &result) {
 	int status;
 	pid_t currPid;
 	streamsize count = 0;
@@ -179,42 +178,51 @@ void readQRCode(uint32_t imageSize, int8_t *image, string &result) {
 	char sysCall[LIB_CALL_SIZE] = "java -cp javase.jar:core.jar com.google.zxing.client.j2se.CommandLineRunner";
 	fstream tmpFile;
 	
-	QRAssert((image != NULL), "readQRCode", "NULL passed as image");
+	try {
+#if DEBUG
+		cout<<"Server: Image size: "<<imageSize<<endl;
+#endif
+		QRAssert((image != NULL), "readQRCode", "NULL passed as image");
+		
+		//image filename will be pid (in hex) (each process only handles 1 image at a time)
+		currPid = getpid();
+		sprintf(image_filename, "%x.png", currPid);
+		sprintf(result_filename, "%x_result", currPid);
+		
+		//save image to file
+		tmpFile.open(image_filename, fstream::out | fstream::binary);
+		QRAssert(tmpFile.is_open(), "fstream::open", "Unable to open image file for writing");
+		tmpFile.write((char*)image, (streamsize)imageSize);
+		QRAssert((!tmpFile.fail()), "fstream::write", "Image file stream reports failure");
+		tmpFile.close();
+		
+		//call library on file
+		//system call: "java [params] [image file] > [result file]"
+		sprintf(sysCall, "%s %s > %s", sysCall, image_filename, result_filename);
+		status = system(sysCall);
+		QRAssert((status != -1), "system", "Error calling system");
+		
+		//get result from result file
+		tmpFile.open(result_filename, fstream::in);
+		QRAssert(tmpFile.is_open(), "fstream::open", "Unable to open QR result file for reading");
+		do {
+			tmpFile.read(result_buffer, RESULT_BUF_SIZE);
+			count = tmpFile.gcount();
+			//don't append if read nothing
+			if(count)
+				result.append(result_buffer, count);
+		} while(count == RESULT_BUF_SIZE); //repeat while buffer is completely full from last read
+		tmpFile.close();
+	}
 	
-	//image filename will be pid (in hex) (each process only handles 1 image at a time)
-	currPid = getpid();
-	sprintf(image_filename, "%x", currPid);
-	sprintf(result_filename, "%x_result", currPid);
+	catch (QRException *exp) {
+		tmpFile.close();
+		//delete temporary files
+		remove(image_filename);
+		remove(result_filename);
+		throw exp;
+	}
 	
-	//save image to file
-	tmpFile.open(image_filename, fstream::out | fstream::binary);
-	QRAssert(tmpFile.is_open(), "fstream::open", "Unable to open image file for writing");
-	tmpFile.write((char*)image, (streamsize)imageSize);
-	QRAssert((!tmpFile.fail()), "fstream::write", "Image file stream reports failure");
-	tmpFile.close();
-	
-	//call library on file
-	//system call: "java [params] [image file] > [result file]"
-	sprintf(sysCall, "%s %s > %s", sysCall, image_filename, result_filename);
-	status = system(sysCall);
-	QRAssert((status != -1), "system", "Error calling system");
-	
-	//get result from result file
-	tmpFile.open(result_filename, fstream::in);
-	QRAssert(tmpFile.is_open(), "fstream::open", "Unable to open QR result file for reading");
-	do {
-		tmpFile.read(result_buffer, RESULT_BUF_SIZE);
-		QRAssert((!tmpFile.fail()), "fstream::read", "Result buffer stream reports failure");
-		count = tmpFile.gcount();
-		//don't append if read nothing
-		if(count)
-			result.append(result_buffer, count);
-	} while(count == RESULT_BUF_SIZE); //repeat while buffer is completely full from last read
-	tmpFile.close();
-	
-	//delete temporary files
-	remove(image_filename);
-	remove(result_filename);
 	return;
 }
 
