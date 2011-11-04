@@ -65,17 +65,17 @@ int main(int argc, char *argv[]) {
 	return status;
 }
 
-//read filename into a char array, make *output point to said array
+//read filename into a uint8_t array, make *output point to said array
 //returns the length of the file
-uint32_t readFile(const char *fileName, char **output) {
+uint32_t readFile(const char *fileName, uint8_t **output) {
 	uint32_t length = 0;
 	//ate flag makes it start at the end of the file, so we can get the size easily
 	ifstream file(fileName, ifstream::binary | ifstream::in | ifstream::ate);
 	if(file.is_open()) {
 		length = file.tellg();
 		file.seekg(0, ifstream::beg);
-		*output = new char[length];
-		file.read(*output, length);
+		*output = new uint8_t[length];
+		file.read((char *)*output, length);
 		file.close();
 	}
 	else {
@@ -87,17 +87,17 @@ uint32_t readFile(const char *fileName, char **output) {
 int sendFile(const char *fileName, int fdSock) {
 	int status = 0;
 	
-	char *file;
+	uint8_t *file;
 	//a plain unsigned int isn't guaranteed to be 32 bits, but uint32_t is
 	uint32_t fileLength = readFile(fileName, &file);
 	if(fileLength < 1) {
 		throw new QRException(__LINE__, NULL, "readFile", "File length is less than 1 byte");
 		}
 	uint32_t netFileLength = htonl(fileLength);
-	int messageLength = fileLength + 4;
-	char *buffer = new char[messageLength];
-	memcpy(buffer, &netFileLength, 4);
-	memcpy(buffer+4, file, fileLength);
+	uint32_t messageLength = fileLength + sizeof(netFileLength);
+	uint8_t *buffer = new uint8_t[messageLength];
+	memcpy(buffer, &netFileLength, sizeof(netFileLength));
+	memcpy(buffer + sizeof(netFileLength), file, fileLength);
 	
 	status = write(fdSock, buffer, messageLength);
 	QRErrCheckStdError(status, "write");
@@ -125,7 +125,7 @@ int rcvResponse(int fdSock) {
 			cerr << "Timeout: ";
 		}
 		
-		char *buffer = new char[length];
+		uint8_t *buffer = new uint8_t[length];
 		status = read(fdSock, buffer, length);
 		QRErrCheckStdError(status, "read");
 		
