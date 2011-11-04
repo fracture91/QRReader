@@ -93,15 +93,13 @@ int sendFile(const char *fileName, int fdSock) {
 	if(fileLength < 1) {
 		throw new QRException(__LINE__, NULL, "readFile", "File length is less than 1 byte");
 		}
-	uint32_t netFileLength = htonl(fileLength);
-	uint32_t messageLength = fileLength + sizeof(netFileLength);
-	uint8_t *buffer = new uint8_t[messageLength];
-	memcpy(buffer, &netFileLength, sizeof(netFileLength));
-	memcpy(buffer + sizeof(netFileLength), file, fileLength);
 	
-	status = write(fdSock, buffer, messageLength);
+	uint32_t netFileLength = htonl(fileLength);
+	status = write(fdSock, &netFileLength, sizeof(netFileLength));
 	QRErrCheckStdError(status, "write");
-	delete[] buffer;
+	
+	status = write(fdSock, file, fileLength);
+	QRErrCheckStdError(status, "write");
 	delete[] file;
 	
 	return status;
