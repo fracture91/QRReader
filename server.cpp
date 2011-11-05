@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <netdb.h>
 #include <errno.h>
@@ -27,6 +28,14 @@ using namespace std;
 #define LIB_CALL_SIZE       128
 #define TIMESTAMP_LEN		24
 
+#define CODE_SUCCESS		0
+#define CODE_FAIL			1
+#define CODE_TIMEOUT		2
+#define CODE_RATELIM		3
+
+#define CONN_QUEUE			4
+#define MAX_FILESIZE		0x100000
+
 /********************
  * Global Variables *
  ********************/
@@ -40,6 +49,10 @@ int g_timeOut = 180;
 
 int *g_childPids = NULL;
 
+//connection-specific variables
+int g_fdConn;
+char g_ipAddrStr[16] = "";
+
 /***********************
  * Function Prototypes *
  ***********************/
@@ -47,12 +60,18 @@ int *g_childPids = NULL;
 //case-insensitive string compare
 int cistrcmp(const char *str1, const char *str2);
 
+//read command line arguments and set global variables
+void readArgs(int argc, char *argv[]);
+
+//handle alarm signal
+void alarmHandler(int signum);
+
 //write a message to the admin log
 int writeToAdminLog(char *ipClient, char *message);
 
 //given a file descriptor for connection with client,
 // give back buffer and buffer size (caller needs to free buffer when done)
-void readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize);
+int readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize);
 
 //given an image and image size, give back a string contained in QR code
 void readQRCode(uint32_t imageSize, uint8_t *image, string &result);
@@ -68,48 +87,28 @@ int extractURI(const string &result, string &uri);
 /************************
  * Function Definitions *
  ************************/
-
+ 
 int main(int argc, char *argv[]) {
 	int status = 0;
 	int fdSock = 0; //file descriptor of listening socket
-	int fdConn = 0; //file descriptor of current connection
 	int pid;
+	int childIdx;
+	int childStatus;
 	struct addrinfo hints, *res;
 	struct sockaddr_storage remoteAddr; //client IP address structure
 	char clientIPStr[16] = ""; //string containing client IP address
+	bool userLimitExceeded;
 	uint32_t clientIP;
 	socklen_t remAddrLen = sizeof(remoteAddr);
 	uint8_t *imgBuf; //buffer containing image
 	uint32_t imgBufSize = 0; //size of image buffer
-	string QRResult; //result from QR library and string to send to client
+	string QRResult; //result from QR library
+	string URI = ""; //URI to send to client
 	uint32_t responseStatus = 0; //status code to send to client
 	ofstream adminLog; //admin log stream object
 	
 	try {
-		//get command line arguments
-		//this is unsafe and will probably segfault if the user doesn't supply args properly
-		if(argc > 1) {
-			for(int curArg = 1; curArg <= argc; curArg++) {
-				if(!cistrcmp(argv[curArg], "port")) {
-					curArg++;
-					strncpy(g_port, argv[curArg], sizeof(g_port)-1);
-				}
-				else if(!cistrcmp(argv[curArg], "rate")) {
-					curArg++;
-					g_rateReqs = atoi(argv[curArg]);
-					curArg++;
-					g_rateSecs = atoi(argv[curArg]);
-				}
-				else if(!cistrcmp(argv[curArg], "max_users")) {
-					curArg++;
-					g_maxUsers = atoi(argv[curArg]);
-				}
-				else if(!cistrcmp(argv[curArg], "time_out")) {
-					curArg++;
-					g_timeOut = atoi(argv[curArg]);
-				}
-			}
-		}
+		readArgs(argc, argv);
 		
 		g_childPids = (int*)calloc(g_maxUsers, sizeof(int));
 		
@@ -129,55 +128,93 @@ int main(int argc, char *argv[]) {
 		//open socket
 		fdSock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 		
-		//bind socket
+		//bind program to socket
 		status = bind(fdSock, res->ai_addr, res->ai_addrlen);
 		QRErrCheckStdError(status, "bind");
 		
 		//listen on socket
-		status = listen(fdSock, 10);
+		status = listen(fdSock, CONN_QUEUE);
 		QRErrCheckStdError(status, "listen");
 		
-		//when receive new connection
-		while((fdConn = accept(fdSock, (struct sockaddr *)&remoteAddr, &remAddrLen)) != -1) {
+		//when receive new connection:
+		while((g_fdConn = accept(fdSock, (struct sockaddr *)&remoteAddr, &remAddrLen)) != -1) {
 			//check for too many users. If too many, don't fork
-			//fork
+			userLimitExceeded = true;
+			for(childIdx = 0; childIdx < g_maxUsers; childIdx++) {
+				//no child in this slot
+				if(g_childPids[childIdx] == 0) {
+					userLimitExceeded = false;
+					break;
+				}
+				else {
+					//check on status of child
+					status = waitpid(g_childPids[childIdx], &childStatus, WNOHANG);
+					//child does not exist or has exited
+					if(status == -1 || status == g_childPids[childIdx]) {
+						g_childPids[childIdx] = 0;
+						userLimitExceeded = false;
+						break;
+					}
+				}
+			}
+			//disconnect client if user limit exceeded
+			if(userLimitExceeded) {
+				close(g_fdConn);
+				g_fdConn = 0;
+				continue;
+			}
+			
+			//fork process; child process will handle client connection, parent will keep listening
 			pid = fork();
 			QRErrCheckStdError(pid, "fork");
+			QRAssert(pid >= 0, "fork", "Unexpected return value");
+			//put child pid in children list
+			g_childPids[childIdx] = pid;
 			if(pid > 0) {
 				//original process waits for new connection
 				continue;
 			}
 			//child process
 			else if(pid == 0) {
+				signal(SIGALRM, alarmHandler);
 				//get IP address string (for admin log)
 				clientIP = ((struct sockaddr_in *) &remoteAddr)->sin_addr.s_addr;
-				sprintf(clientIPStr, "%ud.%ud.%ud.%ud",
+				sprintf(clientIPStr, "%u.%u.%u.%u",
 					(clientIP & 0xFF000000)>>24, (clientIP & 0xFF0000)>>16,
 					(clientIP & 0xFF00)>>8,      (clientIP & 0xFF));
 #if DEBUG
 				cout<<"server: Accepted Connection" << endl;
 				cout<<"Server: Client Address: "<<clientIPStr<<endl;
 #endif
-				//rcv client message
-				readClientMsg(fdConn, &imgBuf, &imgBufSize);
-				//check for rate limit violation or timeout
-				//call library to convert qr code to URL
-				readQRCode(imgBufSize, imgBuf, QRResult);
-				free(imgBuf);
-				imgBuf = NULL;
-				
-				string URI = "";
-				status = extractURI(QRResult, URI);
-				//TODO: fail more gracefully by sending failure response to client
-				QRErrCheckNotZero(status, "extractURI");
-				
-				//determine return code
-				//respond to client
-				sendQRResult(fdConn, responseStatus, URI);
+				//while not timed out:
+				while(g_fdConn > 0) {
+					status = readClientMsg(g_fdConn, &imgBuf, &imgBufSize);
+					//set alarm for timeout
+					alarm(g_timeOut);
+					//check to make sure file is not too large 
+					if(status == 0) {
+						//TODO: check for rate limit violation
+						
+						//call library to convert qr code to text
+						readQRCode(imgBufSize, imgBuf, QRResult);
+						free(imgBuf);
+						imgBuf = NULL;
+						
+						//extract URI from result from library
+						status = extractURI(QRResult, URI);
+						if(status == 1) {
+							string errMsg = "";
+							sendQRResult(g_fdConn, CODE_FAIL, errMsg);
+						}
+						else {					
+							sendQRResult(g_fdConn, responseStatus, URI);
+						}
+					}
+				}
 				return 0;
 			}
 		}
-		QRErrCheckStdError(fdConn, "accept");
+		QRErrCheckStdError(g_fdConn, "accept");
 		
 		
 		
@@ -222,6 +259,37 @@ int cistrcmp(const char *str1, const char *str2) {
 	return cmpresult;
 }
 
+//Read command-line arguments, set global variables
+//Input:
+//	argc: number of arguments (as passed to main)
+//	argv: array of character arrays containing arguments (as passed to main)
+void readArgs(int argc, char *argv[]) {
+	//get command line arguments
+	//this is unsafe and will probably segfault if the user doesn't supply args properly
+	if(argc > 1) {
+		for(int curArg = 1; curArg <= argc; curArg++) {
+			if(!cistrcmp(argv[curArg], "port")) {
+				curArg++;
+				strncpy(g_port, argv[curArg], sizeof(g_port)-1);
+			}
+			else if(!cistrcmp(argv[curArg], "rate")) {
+				curArg++;
+				g_rateReqs = atoi(argv[curArg]);
+				curArg++;
+				g_rateSecs = atoi(argv[curArg]);
+			}
+			else if(!cistrcmp(argv[curArg], "max_users")) {
+				curArg++;
+				g_maxUsers = atoi(argv[curArg]);
+			}
+			else if(!cistrcmp(argv[curArg], "time_out")) {
+				curArg++;
+				g_timeOut = atoi(argv[curArg]);
+			}
+		}
+	}
+}
+
 //Writes a message to the admin log
 //Input:
 //	outfile: stream to write to
@@ -244,6 +312,13 @@ void writeToAdminLog(ostream &outfile, char *ipClient, char *message) {
 	return;
 }
 
+void alarmHandler(int signum) {
+	string errMsg = "timeout";
+	sendQRResult(g_fdConn, CODE_TIMEOUT, errMsg);
+	close(g_fdConn);
+	g_fdConn = 0;
+}
+
 //read message from client
 //Notes: caller needs to free buffer
 //Input:
@@ -251,18 +326,30 @@ void writeToAdminLog(ostream &outfile, char *ipClient, char *message) {
 //Output:
 //	buffer: pointer to unallocated buffer. This buffer is allocated and the file data placed into it
 //	bufSize: size of buffer in bytes
-void readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize) {
+int readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize) {
 	uint32_t lenFromClient;
 	int status = 0;
+	bool tooLarge = false;
 	QRAssert((buffer != NULL), "readClientMsg", "NULL passed as buffer");
 	QRAssert((bufSize != NULL), "readClientMsg", "NULL passed as bufSize");
 	
 	//get buffer size
 	status = read(fdConn, &lenFromClient, sizeof(lenFromClient));
 	QRErrCheckStdError(status, "read");
+	
+	//check for no more data
+	if(status == 0) {
+		return -1;
+	}
+	
 	lenFromClient = ntohl(lenFromClient);
 	*bufSize = lenFromClient;
 	
+	
+	//check for file too large
+	if(lenFromClient > MAX_FILESIZE) {
+		tooLarge = true;
+	}
 	//allocate buffer
 	*buffer = (uint8_t*)calloc(lenFromClient, sizeof(uint8_t));
 	QRAssert((*buffer != NULL), "calloc", "Unable to allocate memory for image buffer");
@@ -271,7 +358,14 @@ void readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize) {
 	status = read(fdConn, *buffer, lenFromClient);
 	QRErrCheckStdError(status, "read");
 	
-	return;
+	if(tooLarge) {
+		free(*buffer);
+		*buffer = 0;
+		*bufSize = 0;
+		return 1;
+	}
+	
+	return 0;
 }
 
 //Read a QR code
@@ -364,7 +458,7 @@ int extractURI(const string &result, string &uri) {
 //Input:
 //	fdConn: file descriptor for socket to send response through
 //	retCode: return code
-//	result: string containing URL to send to client
+//	result: string containing URI to send to client
 void sendQRResult(int fdConn, uint32_t retCode, string &result) {
 	int status = 0;
 	uint32_t length;
