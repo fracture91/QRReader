@@ -20,15 +20,14 @@ int main(int argc, char *argv[]) {
 	int status = 0;
 	int fdSock = 0;
 	struct addrinfo *addr = NULL;
-	char *fileName = NULL;
 	
 	try	{
 		//todo: port and IP address options
-		if(argc != 2) {
-			cerr << "Usage: client.elf IMAGE_FILE" << endl;
-			throw new QRException(__LINE__, NULL, "user input", "Image file argument is required.");
+		if(argc < 2) {
+			cerr << "Usage: client.elf IMAGE_FILE1, IMAGE_FILE2, ..." << endl;
+			throw new QRException(__LINE__, NULL, "user input",
+				"At least one image file argument is required.");
 		}
-		fileName = argv[1];
 		
 		status = getaddrinfo("127.0.0.1", "2011", NULL, &addr);
 		QRErrCheckNotZero(status, "getaddrinfo");
@@ -39,21 +38,15 @@ int main(int argc, char *argv[]) {
 		status = connect(fdSock, addr->ai_addr, addr->ai_addrlen);
 		QRErrCheckStdError(status, "connect");
 
-		status = sendFile(fileName, fdSock);
-		QRErrCheckStdError(status, "sendFile");
+		//send all of the image files and receive responses from server
+		for(int i = 1; i < argc; i++) {
+			status = sendFile(argv[i], fdSock);
+			QRErrCheckStdError(status, "sendFile");
+			
+			status = rcvResponse(fdSock);
+			QRErrCheckStdError(status, "rcvResponse");
+		}
 		
-		status = rcvResponse(fdSock);
-		QRErrCheckStdError(status, "rcvResponse");
-		
-		//receieve return code
-		//receive string
-			//get string array size
-			//get array
-		//if success:
-			//display URL
-		//if failure:
-			//display error message
-		//repeat or break out of loop
 		//disconnect
 		status = close(fdSock);
 		QRErrCheckStdError(status, "close");
