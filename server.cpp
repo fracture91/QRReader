@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <iostream>
 #include <fstream>
+#include <string>
 using namespace std;
 
 #include "qrexception.h"
@@ -58,6 +59,9 @@ void readQRCode(uint32_t imageSize, uint8_t *image, string &result);
 
 //Given a file descriptor and result string, send result string to client
 void sendQRResult(int fdConn, uint32_t retCode, string &result);
+
+//Get the URI from the output of zxing call
+int extractURI(const string &result, string &uri);
 
 
 
@@ -161,9 +165,15 @@ int main(int argc, char *argv[]) {
 				readQRCode(imgBufSize, imgBuf, QRResult);
 				free(imgBuf);
 				imgBuf = NULL;
+				
+				string URI = "";
+				status = extractURI(QRResult, URI);
+				//TODO: fail more gracefully by sending failure response to client
+				QRErrCheckNotZero(status, "extractURI");
+				
 				//determine return code
 				//respond to client
-				sendQRResult(fdConn, responseStatus, QRResult);
+				sendQRResult(fdConn, responseStatus, URI);
 				return 0;
 			}
 		}
@@ -324,6 +334,30 @@ void readQRCode(uint32_t imageSize, uint8_t *image, string &result) {
 	remove(image_filename);
 	remove(result_filename);
 	return;
+}
+
+//Assign the URI contained in the result string to the uri string if it can be found.
+//If the result is not identified as a URI or there are other problems,
+//this function returns 1.  Otherwise, 0.
+int extractURI(const string &result, string &uri) {
+	istringstream resultStream(result);
+	string line;
+	getline(resultStream, line);
+	
+	if(line.find("type: URI") != string::npos) {
+		string target = "Parsed result:\n";
+		size_t targetLocation = result.find(target);
+		if(targetLocation != string::npos) {
+			resultStream.seekg(targetLocation + target.length());
+			getline(resultStream, line);
+			if(!line.empty()) {
+				uri.assign(line);
+				return 0;
+			}
+		}
+	}
+	
+	return 1;
 }
 
 //Send the response to the client:
