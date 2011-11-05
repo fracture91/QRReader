@@ -52,6 +52,7 @@ int *g_childPids = NULL;
 //connection-specific variables
 int g_fdConn;
 char g_ipAddrStr[16] = "";
+ofstream g_AdminLogFile;
 
 /***********************
  * Function Prototypes *
@@ -67,7 +68,7 @@ void readArgs(int argc, char *argv[]);
 void alarmHandler(int signum);
 
 //write a message to the admin log
-int writeToAdminLog(char *ipClient, char *message);
+void writeToAdminLog(const char *message);
 
 //given a file descriptor for connection with client,
 // give back buffer and buffer size (caller needs to free buffer when done)
@@ -96,7 +97,6 @@ int main(int argc, char *argv[]) {
 	int childStatus;
 	struct addrinfo hints, *res;
 	struct sockaddr_storage remoteAddr; //client IP address structure
-	char clientIPStr[16] = ""; //string containing client IP address
 	bool userLimitExceeded;
 	uint32_t clientIP;
 	socklen_t remAddrLen = sizeof(remoteAddr);
@@ -105,12 +105,15 @@ int main(int argc, char *argv[]) {
 	string QRResult; //result from QR library
 	string URI = ""; //URI to send to client
 	uint32_t responseStatus = 0; //status code to send to client
-	ofstream adminLog; //admin log stream object
 	
 	try {
 		readArgs(argc, argv);
 		
 		g_childPids = (int*)calloc(g_maxUsers, sizeof(int));
+		
+		//open admin log file: output, append
+		g_AdminLogFile.open("adminLog.txt", fstream::out | fstream::app);
+		writeToAdminLog("Server starting...");
 		
 		//fill in hints struct
 		memset(&hints, 0, sizeof hints);
@@ -121,9 +124,6 @@ int main(int argc, char *argv[]) {
 		//use hints struct to create addrinfo struct
 		status = getaddrinfo(NULL, g_port, &hints, &res);
 		QRErrCheckNotZero(status, "getaddrinfo");
-		
-		//open admin log file: output, append
-		adminLog.open("adminLog.txt", fstream::out | fstream::app);
 		
 		//open socket
 		fdSock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
@@ -136,8 +136,18 @@ int main(int argc, char *argv[]) {
 		status = listen(fdSock, CONN_QUEUE);
 		QRErrCheckStdError(status, "listen");
 		
+		writeToAdminLog("Listening for clients");
+		
 		//when receive new connection:
 		while((g_fdConn = accept(fdSock, (struct sockaddr *)&remoteAddr, &remAddrLen)) != -1) {
+			//get IP address string (for admin log)
+			clientIP = ((struct sockaddr_in *) &remoteAddr)->sin_addr.s_addr;
+			sprintf(g_ipAddrStr, "%u.%u.%u.%u",
+				(clientIP & 0xFF000000)>>24, (clientIP & 0xFF0000)>>16,
+				(clientIP & 0xFF00)>>8,      (clientIP & 0xFF));
+			
+			writeToAdminLog("Client connected.");
+			
 			//check for too many users. If too many, don't fork
 			userLimitExceeded = true;
 			for(childIdx = 0; childIdx < g_maxUsers; childIdx++) {
@@ -161,6 +171,7 @@ int main(int argc, char *argv[]) {
 			if(userLimitExceeded) {
 				close(g_fdConn);
 				g_fdConn = 0;
+				writeToAdminLog("Client dropped: User limit exceeded.");
 				continue;
 			}
 			
@@ -176,26 +187,27 @@ int main(int argc, char *argv[]) {
 			}
 			//child process
 			else if(pid == 0) {
+				//register timeout signal handler
 				signal(SIGALRM, alarmHandler);
-				//get IP address string (for admin log)
-				clientIP = ((struct sockaddr_in *) &remoteAddr)->sin_addr.s_addr;
-				sprintf(clientIPStr, "%u.%u.%u.%u",
-					(clientIP & 0xFF000000)>>24, (clientIP & 0xFF0000)>>16,
-					(clientIP & 0xFF00)>>8,      (clientIP & 0xFF));
 #if DEBUG
 				cout<<"server: Accepted Connection" << endl;
-				cout<<"Server: Client Address: "<<clientIPStr<<endl;
+				cout<<"Server: Client Address: "<<g_ipAddrStr<<endl;
 #endif
 				//while not timed out:
-				while(g_fdConn > 0) {
+				do {
 					responseStatus = 0;
 					URI.clear();
 					QRResult.clear();
 					status = readClientMsg(g_fdConn, &imgBuf, &imgBufSize);
 					//set alarm for timeout
 					alarm(g_timeOut);
-					//check to make sure file is not too large 
-					if(status == 0) {
+					//check to make sure file is not too large
+					if(status == 1) {
+						writeToAdminLog("File too large; ignoring request.");
+					}
+					else if(status == 0) {
+						writeToAdminLog("Receiving file from client");
+						
 						//TODO: check for rate limit violation
 						
 						//call library to convert qr code to text
@@ -206,22 +218,28 @@ int main(int argc, char *argv[]) {
 						
 						//extract URI from result from library
 						status = extractURI(QRResult, URI);
+						//error reading qr code
 						if(status == 1) {
+							writeToAdminLog("Invalid QR code (unable to parse)");
 							string errMsg = "";
 							sendQRResult(g_fdConn, CODE_FAIL, errMsg);
 						}
-						else {					
+						else {
+							writeToAdminLog("Sending QR result to client.");
+							writeToAdminLog(URI.c_str());
 							sendQRResult(g_fdConn, responseStatus, URI);
 						}
 					}
-				}
+					else if(status < 0) {
+						writeToAdminLog("Disconnecting from client.");
+						close(g_fdConn);
+						g_fdConn = 0;
+					}
+				} while(g_fdConn > 0);
 				return 0;
 			}
 		}
 		QRErrCheckStdError(g_fdConn, "accept");
-		
-		
-		
 	}
 	catch (QRException *exp) {
 		exp->printError(cerr);
@@ -230,7 +248,7 @@ int main(int argc, char *argv[]) {
 	free(imgBuf);
 	imgBuf = NULL;
 	free(g_childPids);
-	adminLog.close();
+	g_AdminLogFile.close();
 	return status;
 }
 
@@ -296,22 +314,19 @@ void readArgs(int argc, char *argv[]) {
 
 //Writes a message to the admin log
 //Input:
-//	outfile: stream to write to
-//	ipClient: string containing IP address of client (pass empty string for 
 //	message: message to write to log
-void writeToAdminLog(ostream &outfile, char *ipClient, char *message) {
+void writeToAdminLog(const char *message) {
 	char timestamp[TIMESTAMP_LEN] = "";
 	time_t timeSt;
 	
-	QRAssert((ipClient != NULL), "writeToAdminLog", "NULL passed as ipClient");
 	QRAssert((message != NULL), "writeToAdminLog", "NULL passed as message");
 	
 	timeSt = time(NULL);
 	//get timestamp
 	strftime(timestamp, TIMESTAMP_LEN, "%Y-%m-%d %H:%M%S", localtime(&timeSt));
 	
-	outfile<<timestamp<<" "<<ipClient<<" "<<message<<"\n"<<endl;
-	QRAssert((!outfile.fail()), "ostream::operator<<", "Unable to write to administrative log");
+	g_AdminLogFile<<timestamp<<" "<<g_ipAddrStr<<" "<<message<<"\n"<<endl;
+	QRAssert((!g_AdminLogFile.fail()), "ostream::operator<<", "Unable to write to administrative log");
 	
 	return;
 }
@@ -330,6 +345,7 @@ void alarmHandler(int signum) {
 //Output:
 //	buffer: pointer to unallocated buffer. This buffer is allocated and the file data placed into it
 //	bufSize: size of buffer in bytes
+//	return value: 1 if file is over size limit, 0 on success, <0 on failure or end of input
 int readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize) {
 	uint32_t lenFromClient;
 	int status = 0;
