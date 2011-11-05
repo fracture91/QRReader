@@ -341,12 +341,12 @@ void sendQRResult(int fdConn, uint32_t retCode, string &result) {
 	QRErrCheckStdError(status, "write");
 	
 	//Bytes 4-7: uint32 containing length of result string
-	length = htonl(result.size());
+	length = htonl(result.size() + 1);
 	status = write(fdConn, (void*)(&length), sizeof(length));
 	QRErrCheckStdError(status, "write");
 	
 	//Bytes 8+: result string
-	status = write(fdConn, result.c_str(), result.size());
+	status = write(fdConn, result.c_str(), result.size() + 1);
 	QRErrCheckStdError(status, "write");
 	
 	return;
