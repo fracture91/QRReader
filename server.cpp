@@ -188,6 +188,9 @@ int main(int argc, char *argv[]) {
 #endif
 				//while not timed out:
 				while(g_fdConn > 0) {
+					responseStatus = 0;
+					URI.clear();
+					QRResult.clear();
 					status = readClientMsg(g_fdConn, &imgBuf, &imgBufSize);
 					//set alarm for timeout
 					alarm(g_timeOut);
@@ -199,6 +202,7 @@ int main(int argc, char *argv[]) {
 						readQRCode(imgBufSize, imgBuf, QRResult);
 						free(imgBuf);
 						imgBuf = NULL;
+						imgBufSize = 0;
 						
 						//extract URI from result from library
 						status = extractURI(QRResult, URI);
@@ -333,9 +337,15 @@ int readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize) {
 	QRAssert((buffer != NULL), "readClientMsg", "NULL passed as buffer");
 	QRAssert((bufSize != NULL), "readClientMsg", "NULL passed as bufSize");
 	
+	if(fdConn == 0) {
+		return -1;
+	}
+	
 	//get buffer size
 	status = read(fdConn, &lenFromClient, sizeof(lenFromClient));
-	QRErrCheckStdError(status, "read");
+	if(status < 0) {
+		return status;
+	}
 	
 	//check for no more data
 	if(status == 0) {
