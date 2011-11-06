@@ -206,7 +206,11 @@ int main(int argc, char *argv[]) {
 					responseStatus = 0;
 					URI.clear();
 					QRResult.clear();
+					
+					//set alarm for timeout
+					alarm(g_timeOut);
 					status = readClientMsg(&imgBuf, &imgBufSize);
+					
 					//set alarm for timeout
 					alarm(g_timeOut);
 					
