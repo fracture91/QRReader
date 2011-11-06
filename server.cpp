@@ -47,12 +47,16 @@ int g_rateSecs = 60;
 int g_maxUsers = 2;
 int g_timeOut = 180;
 
+//array of pids of children
 int *g_childPids = NULL;
+//array of request timestamps
+time_t *g_reqTimes = NULL;
 
 //connection-specific variables
 int g_fdConn;
 char g_ipAddrStr[16] = "";
 ofstream g_AdminLogFile;
+ofstream g_ErrorLogFile;
 
 /***********************
  * Function Prototypes *
@@ -72,13 +76,13 @@ void writeToAdminLog(const char *message);
 
 //given a file descriptor for connection with client,
 // give back buffer and buffer size (caller needs to free buffer when done)
-int readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize);
+int readClientMsg(uint8_t **buffer, uint32_t *bufSize);
 
 //given an image and image size, give back a string contained in QR code
 void readQRCode(uint32_t imageSize, uint8_t *image, string &result);
 
 //Given a file descriptor and result string, send result string to client
-void sendQRResult(int fdConn, uint32_t retCode, string &result);
+void sendQRResult(uint32_t retCode, string &result);
 
 //Get the URI from the output of zxing call
 int extractURI(const string &result, string &uri);
@@ -97,6 +101,7 @@ int main(int argc, char *argv[]) {
 	int childStatus;
 	struct addrinfo hints, *res;
 	struct sockaddr_storage remoteAddr; //client IP address structure
+	int reqIdx = 0; //request index for rate limiting
 	bool userLimitExceeded;
 	uint32_t clientIP;
 	socklen_t remAddrLen = sizeof(remoteAddr);
@@ -110,10 +115,13 @@ int main(int argc, char *argv[]) {
 		readArgs(argc, argv);
 		
 		g_childPids = (int*)calloc(g_maxUsers, sizeof(int));
+		g_reqTimes = (time_t*)calloc(g_rateReqs, sizeof(time_t));
 		
 		//open admin log file: output, append
 		g_AdminLogFile.open("adminLog.txt", fstream::out | fstream::app);
 		writeToAdminLog("Server starting...");
+		
+		g_ErrorLogFile.open("serverErrorLog.txt", fstream::out | fstream::app);
 		
 		//fill in hints struct
 		memset(&hints, 0, sizeof hints);
@@ -198,17 +206,28 @@ int main(int argc, char *argv[]) {
 					responseStatus = 0;
 					URI.clear();
 					QRResult.clear();
-					status = readClientMsg(g_fdConn, &imgBuf, &imgBufSize);
+					status = readClientMsg(&imgBuf, &imgBufSize);
 					//set alarm for timeout
 					alarm(g_timeOut);
+					
+					//check for rate limit exceeded
+					//uses rotating buffer of request timestamps, one element per file allowed in time period
+					//sets index to oldest timestamp, checks against oldest, then overwrites oldest timestamp with current time
+					g_reqTimes[reqIdx] = time(NULL);
+					reqIdx = (reqIdx + 1) % g_rateReqs;
+					if(difftime(time(NULL), g_reqTimes[reqIdx]) < g_rateSecs) {
+						string errMsg = "Rate limit exceeded.";
+						writeToAdminLog("Rate limit exceeded.");
+						sendQRResult(CODE_RATELIM, errMsg);
+						continue;
+					}
+					
 					//check to make sure file is not too large
 					if(status == 1) {
 						writeToAdminLog("File too large; ignoring request.");
 					}
 					else if(status == 0) {
 						writeToAdminLog("Receiving file from client");
-						
-						//TODO: check for rate limit violation
 						
 						//call library to convert qr code to text
 						readQRCode(imgBufSize, imgBuf, QRResult);
@@ -222,12 +241,12 @@ int main(int argc, char *argv[]) {
 						if(status == 1) {
 							writeToAdminLog("Invalid QR code (unable to parse)");
 							string errMsg = "";
-							sendQRResult(g_fdConn, CODE_FAIL, errMsg);
+							sendQRResult(CODE_FAIL, errMsg);
 						}
 						else {
 							writeToAdminLog("Sending QR result to client.");
 							writeToAdminLog(URI.c_str());
-							sendQRResult(g_fdConn, responseStatus, URI);
+							sendQRResult(responseStatus, URI);
 						}
 					}
 					else if(status < 0) {
@@ -242,13 +261,15 @@ int main(int argc, char *argv[]) {
 		QRErrCheckStdError(g_fdConn, "accept");
 	}
 	catch (QRException *exp) {
-		exp->printError(cerr);
+		exp->printError(g_ErrorLogFile);
+		writeToAdminLog("Error. Check error log.");
 		status = -1;
 	}
 	free(imgBuf);
 	imgBuf = NULL;
 	free(g_childPids);
 	g_AdminLogFile.close();
+	g_ErrorLogFile.close();
 	return status;
 }
 
@@ -323,7 +344,7 @@ void writeToAdminLog(const char *message) {
 	
 	timeSt = time(NULL);
 	//get timestamp
-	strftime(timestamp, TIMESTAMP_LEN, "%Y-%m-%d %H:%M%S", localtime(&timeSt));
+	strftime(timestamp, TIMESTAMP_LEN, "%Y-%m-%d %H:%M:%S", localtime(&timeSt));
 	
 	g_AdminLogFile<<timestamp<<" "<<g_ipAddrStr<<" "<<message<<"\n"<<endl;
 	QRAssert((!g_AdminLogFile.fail()), "ostream::operator<<", "Unable to write to administrative log");
@@ -333,32 +354,30 @@ void writeToAdminLog(const char *message) {
 
 void alarmHandler(int signum) {
 	string errMsg = "timeout";
-	sendQRResult(g_fdConn, CODE_TIMEOUT, errMsg);
+	sendQRResult(CODE_TIMEOUT, errMsg);
 	close(g_fdConn);
 	g_fdConn = 0;
 }
 
 //read message from client
 //Notes: caller needs to free buffer
-//Input:
-//	fdConn: file descriptor for socket to read from
 //Output:
 //	buffer: pointer to unallocated buffer. This buffer is allocated and the file data placed into it
 //	bufSize: size of buffer in bytes
 //	return value: 1 if file is over size limit, 0 on success, <0 on failure or end of input
-int readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize) {
+int readClientMsg(uint8_t **buffer, uint32_t *bufSize) {
 	uint32_t lenFromClient;
 	int status = 0;
 	bool tooLarge = false;
 	QRAssert((buffer != NULL), "readClientMsg", "NULL passed as buffer");
 	QRAssert((bufSize != NULL), "readClientMsg", "NULL passed as bufSize");
 	
-	if(fdConn == 0) {
+	if(g_fdConn == 0) {
 		return -1;
 	}
 	
 	//get buffer size
-	status = read(fdConn, &lenFromClient, sizeof(lenFromClient));
+	status = read(g_fdConn, &lenFromClient, sizeof(lenFromClient));
 	if(status < 0) {
 		return status;
 	}
@@ -381,7 +400,7 @@ int readClientMsg(int fdConn, uint8_t **buffer, uint32_t *bufSize) {
 	QRAssert((*buffer != NULL), "calloc", "Unable to allocate memory for image buffer");
 	
 	//get buffer contents
-	status = read(fdConn, *buffer, lenFromClient);
+	status = read(g_fdConn, *buffer, lenFromClient);
 	QRErrCheckStdError(status, "read");
 	
 	if(tooLarge) {
@@ -482,10 +501,9 @@ int extractURI(const string &result, string &uri) {
 
 //Send the response to the client:
 //Input:
-//	fdConn: file descriptor for socket to send response through
 //	retCode: return code
 //	result: string containing URI to send to client
-void sendQRResult(int fdConn, uint32_t retCode, string &result) {
+void sendQRResult(uint32_t retCode, string &result) {
 	int status = 0;
 	uint32_t strLen;
 	uint8_t *message;
@@ -513,7 +531,7 @@ void sendQRResult(int fdConn, uint32_t retCode, string &result) {
 		memcpy((message+8), result.c_str(), result.size()+1);
 	}
 	
-	status = write(fdConn, message, msgLen);
+	status = write(g_fdConn, message, msgLen);
 	QRErrCheckStdError(status, "write");
 	
 	return;
