@@ -13,6 +13,9 @@ using namespace std;
 
 #include "qrexception.h"
 
+//if true, wait for input before sending each image
+#define TIMEOUT false
+
 int sendFile(const char *fileName, int fdSock);
 int rcvResponse(int fdSock);
 
@@ -40,6 +43,13 @@ int main(int argc, char *argv[]) {
 
 		//send all of the image files and receive responses from server
 		for(int i = 1; i < argc; i++) {
+			//for testing timeouts
+			if(TIMEOUT) {
+				cout << "Waiting for timeout, enter anything..." << endl;
+				char dump[255];
+				cin.getline(dump, 255);
+			}
+		
 			status = sendFile(argv[i], fdSock);
 			QRErrCheckStdError(status, "sendFile");
 			
