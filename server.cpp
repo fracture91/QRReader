@@ -316,7 +316,7 @@ void readArgs(int argc, char *argv[]) {
 	//get command line arguments
 	//this is unsafe and will probably segfault if the user doesn't supply args properly
 	if(argc > 1) {
-		for(int curArg = 1; curArg <= argc; curArg++) {
+		for(int curArg = 1; curArg < argc; curArg++) {
 			if(!cistrcmp(argv[curArg], "port")) {
 				curArg++;
 				strncpy(g_port, argv[curArg], sizeof(g_port)-1);
