@@ -21,8 +21,6 @@ using namespace std;
 /***********
  * Defines *
  ***********/
-#define DEBUG 1
-
 #define RESULT_BUF_SIZE     512
 #define TMP_FILENAME_SIZE   64
 #define LIB_CALL_SIZE       128
@@ -197,10 +195,6 @@ int main(int argc, char *argv[]) {
 			else if(pid == 0) {
 				//register timeout signal handler
 				signal(SIGALRM, alarmHandler);
-#if DEBUG
-				cout<<"server: Accepted Connection" << endl;
-				cout<<"Server: Client Address: "<<g_ipAddrStr<<endl;
-#endif
 				//while not timed out:
 				do {
 					responseStatus = 0;
