@@ -111,26 +111,42 @@ int rcvResponse(int fdSock) {
 	uint32_t returnCode = readIntFromResponse(fdSock);
 	uint32_t length = readIntFromResponse(fdSock);
 
-	if(returnCode == 0 || returnCode == 2) {
-		if(returnCode == 2) {
-			cerr << "Timeout: ";
-		}
-		
-		uint8_t *buffer = new uint8_t[length];
-		status = read(fdSock, buffer, length);
-		QRErrCheckStdError(status, "read");
-		
-		if(returnCode == 0) {
-			cout << buffer << endl;
+	bool printable = true;
+	ostream *outputStream = &cerr;
+	string statusMessage = "";
+	
+	switch(returnCode) {
+	case 2:
+		statusMessage = "Timeout: ";
+		break;
+	case 3:
+		statusMessage = "Rate Limit Exceeded: ";
+		break;
+	//No returnCode 4 in the case of maximum users being hit.
+	//Connection just dies in that case for efficiency's sake.
+	case 0:
+		outputStream = &cout;
+		break;
+	default:
+		printable = false;
+		cerr << "Failure" << endl;
+	}
+	
+	if(printable) {
+		//all ASCII strings must be null terminated, so all intelligible messages
+		//must be more than 1 byte in length
+		if(length > 1) {
+			uint8_t *buffer = new uint8_t[length];
+			status = read(fdSock, buffer, length);
+			QRErrCheckStdError(status, "read");
+			
+			*outputStream << statusMessage << buffer << endl;
+			
+			delete[] buffer;
 		}
 		else {
-			cerr << buffer << endl;
+			*outputStream << statusMessage << "[Message length is less than one]" << endl;
 		}
-		
-		delete[] buffer;
-	}
-	else {
-		cerr << "Failure" << endl;
 	}
 	
 	return status;
