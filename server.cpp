@@ -228,7 +228,9 @@ int main(int argc, char *argv[]) {
 					
 					//check to make sure file is not too large
 					if(status == 1) {
-						writeToAdminLog("File too large; ignoring request.");
+						string errMsg = "File too large";
+						writeToAdminLog("File too large; dropping file.");
+						sendQRResult(CODE_FAIL, errMsg);
 					}
 					else if(status == 0) {
 						writeToAdminLog("Receiving file from client");
