@@ -491,25 +491,27 @@ void sendQRResult(int fdConn, uint32_t retCode, string &result) {
 	uint8_t *message;
 	int msgLen;
 	
-	msgLen = 9+result.size();
+	if(result.size() == 0) {
+		msgLen = 8;
+	}
+	else {
+		msgLen = 9+result.size();
+	}
 	message = (uint8_t*)calloc(msgLen, sizeof(uint8_t));
 	
 	//Bytes 0-3: uint32 containing return code
 	retCode = htonl(retCode);
 	memcpy((message+0), &retCode, 4);
-//	status = write(fdConn, (void*)(&retCode), sizeof(retCode));
-//	QRErrCheckStdError(status, "write");
 	
 	//Bytes 4-7: uint32 containing length of result string
 	strLen = htonl(result.size() + 1);
 	memcpy((message+4), &strLen, 4);
-//	status = write(fdConn, (void*)(&strLen), sizeof(strLen));
-//	QRErrCheckStdError(status, "write");
 	
 	//Bytes 8+: result string
-	memcpy((message+8), result.c_str(), result.size()+1);
-//	status = write(fdConn, result.c_str(), result.size() + 1);
-//	QRErrCheckStdError(status, "write");
+	if(result.size() > 0)
+	{
+		memcpy((message+8), result.c_str(), result.size()+1);
+	}
 	
 	status = write(fdConn, message, msgLen);
 	QRErrCheckStdError(status, "write");
