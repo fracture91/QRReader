@@ -34,7 +34,7 @@ using namespace std;
 #define CODE_RATELIM		3
 
 #define CONN_QUEUE			4
-#define MAX_FILESIZE		0x100000
+#define MAX_FILESIZE		0x80000
 
 /********************
  * Global Variables *
@@ -390,26 +390,42 @@ int readClientMsg(uint8_t **buffer, uint32_t *bufSize) {
 	lenFromClient = ntohl(lenFromClient);
 	*bufSize = lenFromClient;
 	
-	
 	//check for file too large
 	if(lenFromClient > MAX_FILESIZE) {
+		uint32_t bytesRead = 0;
+		uint32_t bytesToRead = 0;
 		tooLarge = true;
-	}
-	//allocate buffer
-	*buffer = (uint8_t*)calloc(lenFromClient, sizeof(uint8_t));
-	QRAssert((*buffer != NULL), "calloc", "Unable to allocate memory for image buffer");
-	
-	//get buffer contents
-	status = read(g_fdConn, *buffer, lenFromClient);
-	QRErrCheckStdError(status, "read");
-	
-	if(tooLarge) {
+		//allocate buffer - smaller than given size to prevent allocating arbitrarily large buffers
+		*buffer = (uint8_t*)calloc(MAX_FILESIZE, 1);
+		QRAssert((*buffer != NULL), "calloc", "Unable to allocate memory for image buffer");
+		
+		//get buffer contents
+		while(bytesRead < lenFromClient) {
+			//determine # of bytes to read from socket this iteration
+			bytesToRead = lenFromClient - bytesRead;
+			if(bytesToRead > MAX_FILESIZE) {
+				bytesToRead = MAX_FILESIZE;
+			}
+			
+			status = read(g_fdConn, *buffer, bytesToRead);
+			QRErrCheckStdError(status, "read");
+			//keep track of total # of bytes read from socket
+			bytesRead += bytesToRead;
+		}
 		free(*buffer);
 		*buffer = 0;
 		*bufSize = 0;
 		return 1;
 	}
-	
+	else {
+		//allocate buffer
+		*buffer = (uint8_t*)calloc(lenFromClient, sizeof(uint8_t));
+		QRAssert((*buffer != NULL), "calloc", "Unable to allocate memory for image buffer");
+		
+		//get buffer contents
+		status = read(g_fdConn, *buffer, lenFromClient);
+		QRErrCheckStdError(status, "read");
+	}	
 	return 0;
 }
 
